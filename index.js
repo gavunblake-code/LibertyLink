@@ -1,115 +1,99 @@
-require('dotenv').config();
 const { Client, GatewayIntentBits } = require('discord.js');
-const express = require('express');
 const mongoose = require('mongoose');
-const fetch = require('node-fetch');
+const express = require('express');
 const cors = require('cors');
+require('dotenv').config();
 
-// 1. Create the Bot client FIRST so it is defined for the rest of the file
-const bot = new Client({ 
-    intents: [
-        GatewayIntentBits.Guilds, 
-        GatewayIntentBits.GuildMessages, 
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
-    ] 
-});
-
-// 2. Set up Express Web Server
+// 1. Initialize Express App for our Backend API
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 3. Database Schema
-const ServerConfig = mongoose.model('ServerConfig', new mongoose.Schema({
-    discordGuildId: String,
-    erlcApiKey: String,
-    statusDisplay: { type: String, default: "Offline" }
-}));
+// 2. Initialize Discord Client
+const bot = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+    ]
+});
 
-// 4. API Endpoint for your website
+// 3. Simple Database Schema & Model for Server Status
+const serverSchema = new mongoose.Schema({
+    guildId: { type: String, required: true, unique: true },
+    serverName: { type: String, default: "ER:LC Server" },
+    status: { type: String, default: "Offline" },
+    players: { type: Number, default: 0 }
+});
+const ServerStatus = mongoose.model('ServerStatus', serverSchema);
+
+// 4. API Endpoints for your HTML Dashboard to Fetch Data
 app.get('/api/status/:guildId', async (req, res) => {
     try {
-        const config = await ServerConfig.findOne({ discordGuildId: req.params.guildId });
-        if (!config) return res.status(404).json({ error: "No API key found." });
-
-        const response = await fetch("https://api.erlc.gg/v2/server?Players=true", {
-            headers: { "server-key": config.erlcApiKey }
-        });
-        const data = await response.json();
-        
-        res.json({
-            erlcData: data,
-            displayStatus: config.statusDisplay
-        });
+        const data = await ServerStatus.findOne({ guildId: req.params.guildId });
+        if (!data) return res.status(404).json({ error: "Server status not found." });
+        res.json(data);
     } catch (err) {
-        res.status(500).json({ error: "Failed to fetch ER:LC data." });
+        res.status(500).json({ error: "Server error fetching status." });
     }
 });
 
 // 5. Discord Bot Events & Commands
-bot.on('ready', () => {
+bot.once('ready', () => {
     console.log(`Bot logged in as ${bot.user.tag}!`);
 });
 
 bot.on('messageCreate', async (message) => {
+    // Ignore bot messages
     if (message.author.bot) return;
 
-    // Setup Command
+    // Command: !setup (Sends the user their custom dashboard link)
     if (message.content.startsWith('!setup')) {
-        if (!message.member.permissions.has('Administrator')) {
-            return message.reply("❌ You must be an Administrator to configure this bot.");
-        }
+        const guildId = message.guildId;
+        if (!guildId) return message.reply("This command can only be used in a Discord Server.");
 
-        const args = message.content.split(' ');
-        const apiKey = args[1];
+        // Your custom GitHub Pages URL! 
+        const dashboardUrl = `https://gavunblake-code.github.io/LibertyLink/?guild=${guildId}`;
 
-        if (!apiKey) {
-            return message.reply("❌ Please provide your ER:LC API key. Example: `!setup your_key_here` \n*(The bot will immediately delete your message to protect your key)*");
-        }
-
-        try {
-            await message.delete();
-        } catch (err) {
-            console.log("Could not delete message. Check bot permissions.");
-        }
-
-        await ServerConfig.findOneAndUpdate(
-            { discordGuildId: message.guild.id }, 
-            { erlcApiKey: apiKey },
-            { upsert: true, new: true }
-        );
-
-        message.channel.send(`✅ **Setup Successful!**\nYour ER:LC server is now linked. Here is your dashboard link:\nhttps://your-website.vercel.app/?guild=${message.guild.id}`);
+        await message.reply({
+            content: `✅ **Setup Successful!**\nYour ER:LC server is now linked. Here is your dashboard link:\n${dashboardUrl}`
+        });
     }
 
-    // Set Status Command
+    // Command: !setstatus [Online/Offline] [Players] (Updates database)
     if (message.content.startsWith('!setstatus')) {
-        const args = message.content.split(' ');
-        const newStatus = args[1];
+        const args = message.content.split(' ').slice(1);
+        const newStatus = args[0] || 'Offline';
+        const playerCount = parseInt(args[1], 10) || 0;
+        const guildId = message.guildId;
 
-        if (!newStatus) {
-            return message.reply("Please specify a status. Example: `!setstatus Green`");
+        if (!guildId) return message.reply("This command must be run in a server.");
+
+        try {
+            await ServerStatus.findOneAndUpdate(
+                { guildId },
+                { 
+                    status: newStatus, 
+                    players: playerCount,
+                    serverName: message.guild.name 
+                },
+                { upsert: true, new: true }
+            );
+
+            message.reply(`🚨 Status updated to **${newStatus}**! The website will now show **${playerCount}** players online.`);
+        } catch (err) {
+            console.error("Failed to update database status:", err);
+            message.reply("❌ Error saving status to the database.");
         }
-
-        const updated = await ServerConfig.findOneAndUpdate(
-            { discordGuildId: message.guild.id }, 
-            { statusDisplay: newStatus },
-            { new: true }
-        );
-
-        if (!updated) {
-            return message.reply("❌ This server has not been set up yet. Use `!setup <key>` first.");
-        }
-
-        message.reply(`🚦 Status updated to **${newStatus}**! The website will update in a few seconds.`);
     }
 });
 
 // 6. Connect to Database & Start everything
 mongoose.connect(process.env.MONGO_URI).then(() => {
     console.log("Connected to MongoDB!");
-    app.listen(process.env.PORT || 3000, () => console.log(`Web API running!`));
+    app.listen(process.env.PORT || 3000, () => {
+        console.log(`Web API running on port ${process.env.PORT || 3000}!`);
+    });
     bot.login(process.env.DISCORD_TOKEN);
 }).catch(err => {
     console.error("Database connection error:", err);
