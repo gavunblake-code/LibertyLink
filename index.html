@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ER:LC Live Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background: #121212; color: #fff; padding: 50px; }
+        .card { background: #1e1e1e; border-radius: 10px; padding: 30px; display: inline-block; min-width: 300px; box-shadow: 0px 4px 10px rgba(0,0,0,0.3); }
+        .status-badge { font-size: 24px; font-weight: bold; padding: 10px 20px; border-radius: 5px; display: inline-block; margin: 20px 0; text-transform: uppercase; }
+        .offline { background: #555; }
+        .green { background: #2ecc71; color: #fff; }
+        .yellow { background: #f1c40f; color: #000; }
+        .red { background: #e74c3c; color: #fff; }
+    </style>
+</head>
+<body>
+
+    <div id="dashboard" class="card" style="display: none;">
+        <h1 id="server-name">Loading Server...</h1>
+        <hr style="border-color: #333;">
+        <h3>Current Status</h3>
+        <div id="status-display" class="status-badge offline">Loading...</div>
+        <h3>Players Online: <span id="player-count">0</span></h3>
+    </div>
+
+    <div id="no-guild" class="card" style="display: none;">
+        <h1>ER:LC Multi-Server Bot</h1>
+        <p>This dashboard is ready to use! To display your server here, follow these steps:</p>
+        <ol style="text-align: left; max-width: 400px; margin: auto;">
+            <li>Invite the Discord Bot to your server.</li>
+            <li>Run <code>!setup YOUR_ERLC_API_KEY</code> in an Admin channel.</li>
+            <li>The bot will delete your key and give you a custom website link!</li>
+        </ol>
+    </div>
+
+    <script>
+        // 1. Automatically grab the "?guild=XXXXXXXX" from the website URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const guildId = urlParams.get('guild');
+
+        // Replace this with your live Render API URL once deployed (e.g., https://your-backend.onrender.com)
+        const apiBaseUrl = "http://localhost:3000"; 
+
+        if (!guildId) {
+            // Show the setup instructions if no guild is in the URL
+            document.getElementById('no-guild').style.display = 'block';
+        } else {
+            // Show the dashboard and start fetching data
+            document.getElementById('dashboard').style.display = 'block';
+            fetchServerData();
+            setInterval(fetchServerData, 10000); // Update every 10 seconds
+        }
+
+        async function fetchServerData() {
+            try {
+                const response = await fetch(`${apiBaseUrl}/api/status/${guildId}`);
+                if (!response.ok) throw new Error("Failed to fetch");
+
+                const data = await response.json();
+
+                // Update server name/players from ER:LC data
+                document.getElementById('server-name').innerText = data.erlcData.Name || "ER:LC Server";
+                document.getElementById('player-count').innerText = data.erlcData.CurrentPlayers ?? 0;
+
+                // Update Status Display
+                const statusDiv = document.getElementById('status-display');
+                const statusText = data.displayStatus.toLowerCase();
+                statusDiv.innerText = data.displayStatus;
+
+                // Dynamically change colors based on what the !setstatus command was
+                statusDiv.className = "status-badge"; // reset classes
+                if (statusText === 'green') statusDiv.classList.add('green');
+                else if (statusText === 'yellow') statusDiv.classList.add('yellow');
+                else if (statusText === 'red') statusDiv.classList.add('red');
+                else statusDiv.classList.add('offline');
+
+            } catch (error) {
+                console.error("Error:", error);
+                document.getElementById('server-name').innerText = "Server Error";
+                document.getElementById('status-display').innerText = "Error Loading";
+            }
+        }
+    </script>
+</body>
+</html>
